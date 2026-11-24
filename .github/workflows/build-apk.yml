@@ -1,6 +1,7 @@
 name: Build Sawtiyat APK
 
 on:
+  push:
   workflow_dispatch:
 
 permissions:
