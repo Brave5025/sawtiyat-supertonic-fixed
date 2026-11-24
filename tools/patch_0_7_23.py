@@ -121,7 +121,7 @@ replacement = r'''
             }
         }
         throw IllegalStateException(
-            "تعذر تنزيل $name بعد 3 محاولات. آخر سبب: \${lastError?.message ?: "خطأ غير معروف"}",
+            "تعذر تنزيل $name بعد 3 محاولات. آخر سبب: " + (lastError?.message ?: "خطأ غير معروف"),
             lastError
         )
     }
