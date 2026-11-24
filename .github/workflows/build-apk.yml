@@ -30,7 +30,7 @@ jobs:
         run: python3 tools/patch_0_7_21.py
 
       - name: Apply Supertonic 0.7.22 audio fixes
-        run: patch --batch --forward -p1 -d source/Sawtiyat-0.7.14-source < tools/supertonic-0.7.22.patch
+        run: python3 tools/patch_0_7_22.py
 
       - name: Verify version identity
         working-directory: source/Sawtiyat-0.7.14-source
