@@ -1,0 +1,57 @@
+name: Build Sawtiyat APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "Sawtiyat-source-supertonic-fix-candidate.zip"
+      - ".github/workflows/build-apk.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify and extract source archive
+        shell: bash
+        run: |
+          test -f Sawtiyat-source-supertonic-fix-candidate.zip
+          unzip -t Sawtiyat-source-supertonic-fix-candidate.zip
+          mkdir source
+          unzip -q Sawtiyat-source-supertonic-fix-candidate.zip -d source
+          test -f source/Sawtiyat-0.7.14-source/gradlew
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Run unit tests and build installable debug APK
+        working-directory: source/Sawtiyat-0.7.14-source
+        run: |
+          chmod +x ./gradlew
+          ./gradlew testDebugUnitTest assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sawtiyat-debug-APK
+          path: source/Sawtiyat-0.7.14-source/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 14
