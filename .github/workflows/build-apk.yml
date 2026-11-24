@@ -4,6 +4,7 @@ on:
   push:
     branches: [ "build-0.7.22", "build-0.7.23" ]
   workflow_dispatch:
+  pull_request:
 
 permissions:
   contents: read
