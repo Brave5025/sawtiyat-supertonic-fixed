@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     paths:
-      - "Sawtiyat-source-supertonic-fix-candidate.zip"
+      - "Sawtiyat-source-part-*.bin"
       - ".github/workflows/build-apk.yml"
 
 permissions:
@@ -18,13 +18,14 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Verify and extract source archive
+      - name: Reassemble, verify and extract source archive
         shell: bash
         run: |
-          test -f Sawtiyat-source-supertonic-fix-candidate.zip
-          unzip -t Sawtiyat-source-supertonic-fix-candidate.zip
+          set -euo pipefail
+          cat Sawtiyat-source-part-01.bin Sawtiyat-source-part-02.bin Sawtiyat-source-part-03.bin > source.zip
+          unzip -t source.zip
           mkdir source
-          unzip -q Sawtiyat-source-supertonic-fix-candidate.zip -d source
+          unzip -q source.zip -d source
           test -f source/Sawtiyat-0.7.14-source/gradlew
 
       - name: Set up Java 17
