@@ -30,8 +30,17 @@ edit(path,
 '''        return File(d, "model.onnx").let { it.isFile && it.length() == 22_284_311L } &&
             File(d, "config.json").let { it.isFile && it.length() == 3_060L }
 ''',
-'''        return verifyArtifact(File(d, "model.onnx"), ICHKIL_SHA, ICHKIL_MODEL_BYTES) &&
-            verifyArtifact(File(d, "config.json"), ICHKIL_CONFIG_SHA, ICHKIL_CONFIG_BYTES)
+'''        val model = File(d, "model.onnx")
+        val config = File(d, "config.json")
+        if (!model.isFile || model.length() != ICHKIL_MODEL_BYTES ||
+            !config.isFile || config.length() != ICHKIL_CONFIG_BYTES) return false
+        val fingerprint = model.absolutePath + ":" + model.length() + ":" + model.lastModified() +
+            "|" + config.absolutePath + ":" + config.length() + ":" + config.lastModified()
+        if (verifiedTashkeelFingerprint == fingerprint) return true
+        val valid = verifyArtifact(model, ICHKIL_SHA, ICHKIL_MODEL_BYTES) &&
+            verifyArtifact(config, ICHKIL_CONFIG_SHA, ICHKIL_CONFIG_BYTES)
+        if (valid) verifiedTashkeelFingerprint = fingerprint
+        return valid
 ''')
 edit(path,
 '''        download("model.onnx", "$base/model.onnx", File(dir, "model.onnx"), ICHKIL_SHA, onProgress)
