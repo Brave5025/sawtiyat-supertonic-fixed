@@ -1,0 +1,256 @@
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -13,8 +13,8 @@
+         applicationId = "com.sawtiyat.app"
+         minSdk = 26
+         targetSdk = 35
+-        versionCode = 37
+-        versionName = "0.7.21"
++        versionCode = 38
++        versionName = "0.7.22"
+         ndk { abiFilters += "arm64-v8a" }
+     }
+
+--- a/app/src/main/java/com/sawtiyat/app/audio/OfflineArabicSpeech.kt
++++ b/app/src/main/java/com/sawtiyat/app/audio/OfflineArabicSpeech.kt
+@@ -232,11 +232,11 @@
+
+         /** وقفات Supertonic مضبوطة من علامات الترقيم؛ لا تضف شيئًا بعد المقطع الأخير. */
+         fun supertonicPauseMs(style: Style): Long = when {
+-            paragraphEnd -> (style.pauseMs * 0.7f).toLong().coerceIn(250L, 380L)
++            paragraphEnd -> (style.pauseMs * 0.45f).toLong().coerceIn(160L, 240L)
+             text.trimEnd().endsWith("؟") || text.trimEnd().endsWith("?") || text.trimEnd().endsWith("!") ||
+-                text.trimEnd().endsWith(".") || text.trimEnd().endsWith("۔") -> 260L
+-            text.trimEnd().endsWith("؛") || text.trimEnd().endsWith(";") || text.trimEnd().endsWith(":") -> 180L
+-            text.trimEnd().endsWith("،") || text.trimEnd().endsWith(",") -> 120L
++                text.trimEnd().endsWith(".") || text.trimEnd().endsWith("۔") -> 220L
++            text.trimEnd().endsWith("؛") || text.trimEnd().endsWith(";") || text.trimEnd().endsWith(":") -> 150L
++            text.trimEnd().endsWith("،") || text.trimEnd().endsWith(",") -> 90L
+             else -> 0L
+         }
+     }
+@@ -284,15 +284,30 @@
+         return (value and 0x7fffffffL).toInt()
+     }
+
+-    /** يحافظ Supertonic على معامل الصمت المحدد لكل نمط كما في 0.7.9. */
+-    internal fun effectiveSupertonicSilenceScale(style: Style): Float = style.silenceScale
++    /** Supertonic expects seconds between its internal chunks, not a silenceScale multiplier. */
++    internal fun effectiveSupertonicSilenceDuration(style: Style): Float = when (style) {
++        Style.NEWS -> 0.12f
++        Style.MEDIA -> 0.15f
++        Style.BOOK -> 0.18f
++        Style.NARRATOR -> 0.20f
++        Style.DOCUMENTARY -> 0.22f
++    }
++
++    /** Native option names supported by Sherpa-ONNX 2.0.1 Supertonic. */
++    internal fun supertonicExtraOptions(style: Style, seed: Int): Map<String, String> = mapOf(
++        "lang" to "ar",
++        "seed" to seed.toString(),
++        "silence_duration" to effectiveSupertonicSilenceDuration(style).toString(),
++        "max_len" to SUPERTONIC_CHUNK_CHAR_LIMIT.toString()
++    )
+
+     /**
+-     * احتفظ بحركات العربية المدعومة في فهرس Unicode للنموذج؛ فهي تساعد على توجيه نطق النص المشكول.
+-     * احذف التطويل والعلامات القرآنية غير المفهرسة فقط، مع إبقاء الهمزات وعلامات الترقيم.
++     * Supertonic's Unicode indexer is NFKD-based. Normalize Arabic hamza/madda forms
++     * before Sherpa so they become indexed base letters plus supported Arabic combining marks.
++     * Keep supported harakat, punctuation and hamza marks; remove tatweel and unindexed Qur'anic annotations.
+      */
+     internal fun normalizeSupertonicText(text: String): String {
+-        val canonical = Normalizer.normalize(text, Normalizer.Form.NFC)
++        val canonical = Normalizer.normalize(text, Normalizer.Form.NFKD)
+         return buildString(canonical.length) {
+             for (char in canonical) {
+                 val code = char.code
+@@ -332,62 +347,6 @@
+         return if (start == 0 && end == samples.size) samples else samples.copyOfRange(start, end)
+     }
+
+-    /**
+-     * Supertonic may emit unusually long internal quiet spans. Preserve short pauses and clamp
+-     * only internal near-silence >=650 ms to 450 ms; never cut the beginning/end or voiced data.
+-     */
+-    internal fun capLongInternalSilence(
+-        samples: FloatArray,
+-        sampleRate: Int,
+-        maxSilenceMs: Int = 450,
+-        detectFromMs: Int = 650
+-    ): FloatArray {
+-        if (samples.isEmpty() || sampleRate <= 0 || maxSilenceMs <= 0 || detectFromMs <= maxSilenceMs) return samples
+-        val peak = samples.maxOf { kotlin.math.abs(it) }
+-        if (!peak.isFinite() || peak < 0.0001f) return samples
+-        val frameSize = (sampleRate / 200).coerceAtLeast(1) // 5 ms
+-        val frameCount = (samples.size + frameSize - 1) / frameSize
+-        val threshold = maxOf(0.0002f, peak * 0.01f)
+-        val minFrames = (detectFromMs * sampleRate / 1000 / frameSize).coerceAtLeast(1)
+-        val keepFrames = (maxSilenceMs * sampleRate / 1000 / frameSize).coerceAtLeast(1)
+-        val removals = ArrayList<IntRange>()
+-        var frame = 0
+-        var quietStart = -1
+-        while (frame <= frameCount) {
+-            val quiet = if (frame < frameCount) {
+-                val from = frame * frameSize
+-                val to = minOf(samples.size, from + frameSize)
+-                var energy = 0.0
+-                for (i in from until to) energy += samples[i].toDouble() * samples[i]
+-                kotlin.math.sqrt(energy / (to - from)) < threshold
+-            } else false
+-            if (quiet && quietStart < 0) quietStart = frame
+-            if (!quiet && quietStart >= 0) {
+-                val quietFrames = frame - quietStart
+-                if (quietStart > 0 && frame < frameCount && quietFrames >= minFrames && quietFrames > keepFrames) {
+-                    val removeFrames = quietFrames - keepFrames
+-                    val removeStart = quietStart + removeFrames / 2
+-                    val from = removeStart * frameSize
+-                    val to = minOf(samples.size, (removeStart + removeFrames) * frameSize)
+-                    if (to > from) removals += from until to
+-                }
+-                quietStart = -1
+-            }
+-            frame++
+-        }
+-        if (removals.isEmpty()) return samples
+-        val output = FloatArray(samples.size - removals.sumOf { it.last - it.first + 1 })
+-        var readAt = 0
+-        var writeAt = 0
+-        for (range in removals) {
+-            val count = range.first - readAt
+-            samples.copyInto(output, writeAt, readAt, range.first)
+-            writeAt += count
+-            readAt = range.last + 1
+-        }
+-        samples.copyInto(output, writeAt, readAt, samples.size)
+-        return output
+-    }
+
+     internal fun effectiveOfflineSilenceScale(style: Style): Float = style.silenceScale.coerceIn(0f, 0.3f)
+
+@@ -478,14 +437,14 @@
+
+     internal fun generateChunk(tts: OfflineTts, text: String, rate: Float, style: Style, voice: Voice = Voice.NABRA, speakerId: Int = 0, onStage: (String) -> Unit = {}, seedDocument: String = text, segmentIndex: Int = 0): GeneratedAudio {
+         val speed = if (voice == Voice.SUPERTONIC) effectiveSupertonicSpeed(rate, style) else effectiveOfflineSpeed(rate, style)
+-        val silenceScale = if (voice == Voice.SUPERTONIC) effectiveSupertonicSilenceScale(style) else effectiveOfflineSilenceScale(style)
++        val silenceScale = if (voice == Voice.SUPERTONIC) 0.2f else effectiveOfflineSilenceScale(style)
+         val preparedText = if (voice == Voice.SUPERTONIC) normalizeSupertonicText(text) else text
+         check(preparedText.isNotBlank()) { "لا يوجد نص قابل للنطق بعد تطبيع التشكيل" }
+         val seed = if (voice == Voice.SUPERTONIC) deterministicSupertonicSeed(seedDocument, segmentIndex, preparedText) else null
+-        val audio = generateRaw(tts, preparedText, speed, silenceScale, voice, speakerId, onStage, seed)
++        val audio = generateRaw(tts, preparedText, speed, silenceScale, voice, speakerId, onStage, seed, style)
+         val trimmed = trimBoundarySilence(audio.samples, audio.sampleRate)
+-        val prepared = if (voice == Voice.SUPERTONIC) capLongInternalSilence(trimmed, audio.sampleRate) else trimmed
+-        return GeneratedAudio(localAudioWithoutPitchShift(prepared), audio.sampleRate)
++        // Keep all internal pauses; trim only boundary silence.
++        return GeneratedAudio(localAudioWithoutPitchShift(trimmed), audio.sampleRate)
+     }
+
+     /** تغيير الطبقة دون تغيير المدة (انظر PitchShift). */
+
+@@ -494,13 +453,13 @@
+     /** لا نعالج طبقة محركات الصوت الطبيعية باستخدام WSOLA. */
+     internal fun localAudioWithoutPitchShift(input: FloatArray): FloatArray = input
+
+-    private fun generateRaw(tts: OfflineTts, text: String, speed: Float, silenceScale: Float, voice: Voice, speakerId: Int, onStage: (String) -> Unit, seed: Int?): GeneratedAudio {
++    private fun generateRaw(tts: OfflineTts, text: String, speed: Float, silenceScale: Float, voice: Voice, speakerId: Int, onStage: (String) -> Unit, seed: Int?, style: Style): GeneratedAudio {
+         if (voice == Voice.SUPERTONIC) {
+             onStage("توليد عربي سياقي محلي")
+             val audio = tts.generateWithConfig(text, GenerationConfig(
+-                speed = speed, sid = speakerId.coerceIn(0, 9), silenceScale = silenceScale,
++                speed = speed, sid = speakerId.coerceIn(0, 9),
+                 numSteps = SUPERTONIC_HIGH_QUALITY_STEPS,
+-                extra = mapOf("lang" to "ar", "seed" to (seed ?: 0).toString())
++                extra = supertonicExtraOptions(style, seed ?: 0)
+             ))
+             check(audio.sampleRate > 0 && audio.samples.isNotEmpty()) { "لم ينتج Supertonic صوتًا" }
+             check(audio.samples.all { it.isFinite() } && audio.samples.maxOf { kotlin.math.abs(it) } > 0.0001f) { "أنتج Supertonic عينات صوت غير صالحة" }
+--- a/app/src/test/java/com/sawtiyat/app/audio/ReaderFeatureTest.kt
++++ b/app/src/test/java/com/sawtiyat/app/audio/ReaderFeatureTest.kt
+@@ -160,20 +160,30 @@
+
+     @Test fun supertonicPauseLengthsFollowPunctuationAndStayBounded() {
+         val style = OfflineArabicSpeech.Style.BOOK
+-        assertEquals(260L, OfflineArabicSpeech.SpeechSegment("سؤال؟", 1f).supertonicPauseMs(style))
+-        assertEquals(180L, OfflineArabicSpeech.SpeechSegment("فكرة؛", 1f).supertonicPauseMs(style))
+-        assertEquals(120L, OfflineArabicSpeech.SpeechSegment("فكرة،", 1f).supertonicPauseMs(style))
++        assertEquals(220L, OfflineArabicSpeech.SpeechSegment("سؤال؟", 1f).supertonicPauseMs(style))
++        assertEquals(150L, OfflineArabicSpeech.SpeechSegment("فكرة؛", 1f).supertonicPauseMs(style))
++        assertEquals(90L, OfflineArabicSpeech.SpeechSegment("فكرة،", 1f).supertonicPauseMs(style))
+         assertEquals(0L, OfflineArabicSpeech.SpeechSegment("تكملة", 1f).supertonicPauseMs(style))
+-        assertEquals(266L, OfflineArabicSpeech.SpeechSegment("فقرة.", 1f, paragraphEnd = true).supertonicPauseMs(style))
++        assertEquals(171L, OfflineArabicSpeech.SpeechSegment("فقرة.", 1f, paragraphEnd = true).supertonicPauseMs(style))
+     }
+
+     @Test fun supertonicNormalizationPreservesModelSupportedHarakatAndProsody() {
+         val source = "مِنِّي بِأَنَّ الْبَحْثَ الْعِلْمِيَّ يَحْتَاجُ، إِلَى جَانِبِ الْمَعْرِفَةِ.\n\nهٰذَا سُؤَالٌ؟"
+         val normalized = OfflineArabicSpeech.normalizeSupertonicText(source)
+-        assertEquals(java.text.Normalizer.normalize(source, java.text.Normalizer.Form.NFC), normalized)
++        assertEquals(java.text.Normalizer.normalize(source, java.text.Normalizer.Form.NFKD), normalized)
+         assertTrue(normalized.any { it.code in 0x064B..0x0655 })
+         assertTrue(normalized.any { it.code == 0x0670 })
+         assertTrue(normalized.contains("،") && normalized.contains("؟"))
++    }
++
++    @Test fun supertonicNfkdDecomposesArabicHamzaAndMaddaIntoIndexedMarks() {
++        val normalized = OfflineArabicSpeech.normalizeSupertonicText("أَإِآؤئ")
++        assertTrue(normalized.contains("ا\u064E\u0654"))
++        assertTrue(normalized.contains("ا\u0650\u0655"))
++        assertTrue(normalized.contains("ا\u0653"))
++        assertTrue(normalized.contains("و\u0654"))
++        assertTrue(normalized.contains("ي\u0654"))
++        assertTrue(normalized.any { it.code == 0x064E || it.code == 0x0650 })
+     }
+
+     @Test fun supertonicNormalizationRemovesOnlyTatweelAndUnindexedQuranicAnnotation() {
+@@ -347,6 +357,14 @@
+
+     @Test fun supertonicUsesCurrentStyleSpeedAndSilenceSettings() {
+         val style = OfflineArabicSpeech.Style.DOCUMENTARY
+         assertEquals(0.9f, OfflineArabicSpeech.effectiveSupertonicSpeed(1f, style), 0.0001f)
+         assertEquals(0.9f, OfflineArabicSpeech.effectiveSupertonicSpeed(1f, OfflineArabicSpeech.Style.NARRATOR), 0.0001f)
+         assertEquals(2.0f, OfflineArabicSpeech.effectiveSupertonicSpeed(2f, OfflineArabicSpeech.Style.NEWS), 0.0001f)
+         assertEquals(0.9f, OfflineArabicSpeech.effectiveSupertonicSpeed(0.5f, OfflineArabicSpeech.Style.DOCUMENTARY), 0.0001f)
+         assertEquals(0.9f, OfflineArabicSpeech.effectiveSupertonicSpeed(0.72f, OfflineArabicSpeech.Style.BOOK), 0.0001f)
+-        assertEquals(style.silenceScale, OfflineArabicSpeech.effectiveSupertonicSilenceScale(style), 0.0001f)
++        assertEquals(0.22f, OfflineArabicSpeech.effectiveSupertonicSilenceDuration(style), 0.0001f)
++        assertEquals(0.12f, OfflineArabicSpeech.effectiveSupertonicSilenceDuration(OfflineArabicSpeech.Style.NEWS), 0.0001f)
++        assertTrue(OfflineArabicSpeech.effectiveSupertonicSilenceDuration(style) < 0.3f)
+         assertEquals(0.3f, OfflineArabicSpeech.effectiveOfflineSilenceScale(style), 0.0001f)
+     }
+
+     @Test fun localTtsTrimsOnlyBoundarySilenceAndRetainsSpeechWithMargin() {
+         val sampleRate = 8_000
+@@ -369,19 +387,25 @@
+
+     @Test fun supertonicCapsOnlyLongInternalSilenceAndPreservesShortPauses() {
+         val rate = 1_000
+-        val voiced = FloatArray(rate / 2) { 0.2f }
+-        val longGap = FloatArray(rate) { 0f }
+-        val input = voiced + longGap + voiced
+-        val capped = OfflineArabicSpeech.capLongInternalSilence(input, rate)
+-        assertEquals(input.size - 550, capped.size)
+-        assertTrue(capped.take(100).all { it == 0.2f })
+-        assertTrue(capped.takeLast(100).all { it == 0.2f })
+-
+-        val shortGap = FloatArray(300) { 0f }
+-        val shortInput = voiced + shortGap + voiced
+-        assertSame(shortInput, OfflineArabicSpeech.capLongInternalSilence(shortInput, rate))
++        val leading = FloatArray(2_500) { 0.001f }
++        val firstSpeech = FloatArray(500) { 0.2f }
++        val internalPause = FloatArray(1_000)
++        val secondSpeech = FloatArray(500) { -0.2f }
++        val trailing = FloatArray(2_500) { 0.001f }
++        val input = leading + firstSpeech + internalPause + secondSpeech + trailing
++        val trimmed = OfflineArabicSpeech.trimBoundarySilence(input, rate)
++        assertTrue("boundary pre-roll was retained", trimmed.size < input.size - 4_000)
++        var longestQuietRun = 0
++        var currentQuietRun = 0
++        for (sample in trimmed) {
++            if (kotlin.math.abs(sample) < 0.0001f) {
++                currentQuietRun++
++                longestQuietRun = maxOf(longestQuietRun, currentQuietRun)
++            } else currentQuietRun = 0
++        }
++        assertTrue("internal pause was shortened: $longestQuietRun", longestQuietRun >= 900)
+    }
