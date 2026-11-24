@@ -104,8 +104,9 @@ replace_once(service,
                                         ) { s -> stage = s }
 ''',
 '''                                            liveRate, liveStyle, liveVoice, liveSpeakerId,
+                                            onStage = { s -> stage = s },
                                             seedDocument = voicedBody, segmentIndex = index
-                                        ) { s -> stage = s }
+                                        )
 ''')
 
 test = "app/src/test/java/com/sawtiyat/app/audio/ReaderFeatureTest.kt"
