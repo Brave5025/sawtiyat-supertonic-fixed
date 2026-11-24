@@ -4,26 +4,54 @@ import re
 ROOT = Path("source/Sawtiyat-0.7.14-source")
 
 
-def replace_once(path: str, old: str, new: str) -> None:
+def read(path: str):
     p = ROOT / path
-    s = p.read_text(encoding="utf-8")
-    count = s.count(old)
-    if count != 1:
-        raise SystemExit(f"Expected exactly one match in {path}, found {count}: {old[:100]!r}")
-    p.write_text(s.replace(old, new, 1), encoding="utf-8")
+    return p, p.read_text(encoding="utf-8")
 
 
-# Version identity for the next candidate build.
-p = ROOT / "app/build.gradle.kts"
-s = p.read_text(encoding="utf-8")
+def write(p, s):
+    p.write_text(s, encoding="utf-8")
+
+
+def replace_required(path: str, old: str, new: str):
+    p, s = read(path)
+    n = s.count(old)
+    if n != 1:
+        raise SystemExit(f"Expected one match in {path}, found {n}: {old[:100]!r}")
+    write(p, s.replace(old, new, 1))
+
+
+def replace_optional(path: str, old: str, new: str):
+    p, s = read(path)
+    if old in s:
+        write(p, s.replace(old, new, 1))
+
+
+def regex_required(path: str, pattern: str, replacement: str):
+    p, s = read(path)
+    s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
+    if n != 1:
+        raise SystemExit(f"Expected one regex match in {path}, found {n}: {pattern}")
+    write(p, s)
+
+
+def regex_optional(path: str, pattern: str, replacement: str):
+    p, s = read(path)
+    s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
+    if n:
+        write(p, s)
+
+
+# Version identity.
+p, s = read("app/build.gradle.kts")
 s, n1 = re.subn(r'versionCode\s*=\s*\d+', 'versionCode = 38', s, count=1)
 s, n2 = re.subn(r'versionName\s*=\s*"[^"]+"', 'versionName = "0.7.22"', s, count=1)
 if n1 != 1 or n2 != 1:
     raise SystemExit("Could not update Android versionCode/versionName")
-p.write_text(s, encoding="utf-8")
+write(p, s)
 
 src = "app/src/main/java/com/sawtiyat/app/audio/OfflineArabicSpeech.kt"
-replace_once(src,
+replace_required(src,
 '''            paragraphEnd -> (style.pauseMs * 0.7f).toLong().coerceIn(250L, 380L)
             text.trimEnd().endsWith("؟") || text.trimEnd().endsWith("?") || text.trimEnd().endsWith("!") ||
                 text.trimEnd().endsWith(".") || text.trimEnd().endsWith("۔") -> 260L
@@ -36,8 +64,7 @@ replace_once(src,
             text.trimEnd().endsWith("؛") || text.trimEnd().endsWith(";") || text.trimEnd().endsWith(":") -> 150L
             text.trimEnd().endsWith("،") || text.trimEnd().endsWith(",") -> 90L
 ''')
-
-replace_once(src,
+replace_required(src,
 '''    /** يحافظ Supertonic على معامل الصمت المحدد لكل نمط كما في 0.7.9. */
     internal fun effectiveSupertonicSilenceScale(style: Style): Float = style.silenceScale
 ''',
@@ -58,60 +85,28 @@ replace_once(src,
         "max_len" to SUPERTONIC_CHUNK_CHAR_LIMIT.toString()
     )
 ''')
-
-replace_once(src,
-'''    /**
-     * احتفظ بحركات العربية المدعومة في فهرس Unicode للنموذج؛ فهي تساعد على توجيه نطق النص المشكول.
-     * احذف التطويل والعلامات القرآنية غير المفهرسة فقط، مع إبقاء الهمزات وعلامات الترقيم.
-     */
-''',
-'''    /**
-     * Supertonic's Unicode indexer is NFKD-based. Normalize Arabic hamza/madda forms
-     * before Sherpa so they become indexed base letters plus supported Arabic combining marks.
-     * Keep supported harakat, punctuation and hamza marks; remove tatweel and unindexed Qur'anic annotations.
-     */
-''')
-replace_once(src,
+replace_required(src,
 '''        val canonical = Normalizer.normalize(text, Normalizer.Form.NFC)
 ''',
 '''        val canonical = Normalizer.normalize(text, Normalizer.Form.NFKD)
 ''')
 
-# Remove the internal silence compressor. Keep generated internal pauses; trim boundaries only.
-p = ROOT / src
-s = p.read_text(encoding="utf-8")
-pattern = re.compile(
-    r'\n    /\*\*\n     \* Supertonic may emit unusually long internal quiet spans\..*?\n    }\n(?=\n    internal fun effectiveOfflineSilenceScale)',
-    re.S,
-)
-s, n = pattern.subn("\n", s, count=1)
-if n != 1:
-    raise SystemExit("Could not remove the internal-silence compressor")
-p.write_text(s, encoding="utf-8")
-
-replace_once(src,
+# Update Supertonic generation. Keep seed support; pass the real silence duration option.
+replace_required(src,
 '''        val silenceScale = if (voice == Voice.SUPERTONIC) effectiveSupertonicSilenceScale(style) else effectiveOfflineSilenceScale(style)
 ''',
 '''        // Supertonic ignores GenerationConfig.silenceScale; its real control is extra.silence_duration.
         val silenceScale = if (voice == Voice.SUPERTONIC) 0.2f else effectiveOfflineSilenceScale(style)
 ''')
-replace_once(src,
-'''        val audio = generateRaw(tts, preparedText, speed, silenceScale, voice, speakerId, onStage, seed)
-        val trimmed = trimBoundarySilence(audio.samples, audio.sampleRate)
-        val prepared = if (voice == Voice.SUPERTONIC) capLongInternalSilence(trimmed, audio.sampleRate) else trimmed
-        return GeneratedAudio(localAudioWithoutPitchShift(prepared), audio.sampleRate)
-''',
-'''        val audio = generateRaw(tts, preparedText, speed, silenceScale, voice, speakerId, onStage, seed, style)
-        val trimmed = trimBoundarySilence(audio.samples, audio.sampleRate)
-        // Keep all internal pauses; trim only boundary silence.
-        return GeneratedAudio(localAudioWithoutPitchShift(trimmed), audio.sampleRate)
-''')
-replace_once(src,
+regex_required(src,
+    r'(?m)^        val audio = generateRaw\(tts, preparedText, speed, silenceScale, voice, speakerId, onStage, seed\)$',
+    '        val audio = generateRaw(tts, preparedText, speed, silenceScale, voice, speakerId, onStage, seed, style)')
+replace_required(src,
 '''    private fun generateRaw(tts: OfflineTts, text: String, speed: Float, silenceScale: Float, voice: Voice, speakerId: Int, onStage: (String) -> Unit, seed: Int?): GeneratedAudio {
 ''',
 '''    private fun generateRaw(tts: OfflineTts, text: String, speed: Float, silenceScale: Float, voice: Voice, speakerId: Int, onStage: (String) -> Unit, seed: Int?, style: Style): GeneratedAudio {
 ''')
-replace_once(src,
+replace_required(src,
 '''                speed = speed, sid = speakerId.coerceIn(0, 9), silenceScale = silenceScale,
                 numSteps = SUPERTONIC_HIGH_QUALITY_STEPS,
                 extra = mapOf("lang" to "ar", "seed" to (seed ?: 0).toString())
@@ -121,9 +116,21 @@ replace_once(src,
                 extra = supertonicExtraOptions(style, seed ?: 0)
 ''')
 
-# Unit-test updates for punctuation and paragraph pause bounds.
+# Remove the optional internal-silence compressor if present in this source variant.
+regex_optional(src,
+    r'\n    /\*\*\n     \* Supertonic may emit unusually long internal quiet spans\..*?\n    }\n(?=\n    internal fun effectiveOfflineSilenceScale)',
+    '\n')
+# Remove any call to the optional compressor; keep only boundary trimming.
+regex_optional(src,
+    r'(?m)^        val prepared = if \(voice == Voice\.SUPERTONIC\) capLongInternalSilence\(trimmed, audio\.sampleRate\) else trimmed\n',
+    '')
+replace_optional(src,
+    'return GeneratedAudio(localAudioWithoutPitchShift(prepared), audio.sampleRate)',
+    '// Keep all internal pauses; trim only boundary silence.\n        return GeneratedAudio(localAudioWithoutPitchShift(trimmed), audio.sampleRate)')
+
+# Tests: pause values, Unicode normalization, actual native options and internal-pause preservation.
 test = "app/src/test/java/com/sawtiyat/app/audio/ReaderFeatureTest.kt"
-replace_once(test,
+replace_optional(test,
 '''        assertEquals(260L, OfflineArabicSpeech.SpeechSegment("سؤال؟", 1f).supertonicPauseMs(style))
         assertEquals(180L, OfflineArabicSpeech.SpeechSegment("فكرة؛", 1f).supertonicPauseMs(style))
         assertEquals(120L, OfflineArabicSpeech.SpeechSegment("فكرة،", 1f).supertonicPauseMs(style))
@@ -136,14 +143,19 @@ replace_once(test,
         assertEquals(0L, OfflineArabicSpeech.SpeechSegment("تكملة", 1f).supertonicPauseMs(style))
         assertEquals(171L, OfflineArabicSpeech.SpeechSegment("فقرة.", 1f, paragraphEnd = true).supertonicPauseMs(style))
 ''')
-replace_once(test,
+replace_optional(test,
 '''        assertEquals(java.text.Normalizer.normalize(source, java.text.Normalizer.Form.NFC), normalized)
 ''',
 '''        assertEquals(java.text.Normalizer.normalize(source, java.text.Normalizer.Form.NFKD), normalized)
 ''')
-
-# Add Arabic hamza/madda regression coverage.
-replace_once(test,
+replace_optional(test,
+'''        assertEquals(style.silenceScale, OfflineArabicSpeech.effectiveSupertonicSilenceScale(style), 0.0001f)
+''',
+'''        assertEquals(0.22f, OfflineArabicSpeech.effectiveSupertonicSilenceDuration(style), 0.0001f)
+        assertEquals(0.12f, OfflineArabicSpeech.effectiveSupertonicSilenceDuration(OfflineArabicSpeech.Style.NEWS), 0.0001f)
+        assertTrue(OfflineArabicSpeech.effectiveSupertonicSilenceDuration(style) < 0.3f)
+''')
+replace_optional(test,
 '''    @Test fun supertonicNormalizationRemovesOnlyTatweelAndUnindexedQuranicAnnotation() {
 ''',
 '''    @Test fun supertonicNfkdDecomposesArabicHamzaAndMaddaIntoIndexedMarks() {
@@ -158,9 +170,7 @@ replace_once(test,
 
     @Test fun supertonicNormalizationRemovesOnlyTatweelAndUnindexedQuranicAnnotation() {
 ''')
-
-# Verify that the exact native options are passed, not the ignored silenceScale field.
-replace_once(test,
+replace_optional(test,
 '''    @Test fun supertonicUsesCurrentStyleSpeedAndSilenceSettings() {
 ''',
 '''    @Test fun supertonicPassesSupportedNativeSilenceAndSeedOptions() {
@@ -173,17 +183,9 @@ replace_once(test,
 
     @Test fun supertonicUsesCurrentStyleSpeedAndSilenceSettings() {
 ''')
-replace_once(test,
-'''        assertEquals(style.silenceScale, OfflineArabicSpeech.effectiveSupertonicSilenceScale(style), 0.0001f)
-''',
-'''        assertEquals(0.22f, OfflineArabicSpeech.effectiveSupertonicSilenceDuration(style), 0.0001f)
-        assertEquals(0.12f, OfflineArabicSpeech.effectiveSupertonicSilenceDuration(OfflineArabicSpeech.Style.NEWS), 0.0001f)
-        assertTrue(OfflineArabicSpeech.effectiveSupertonicSilenceDuration(style) < 0.3f)
-''')
 
-# Replace the old silence-compression test with boundary-trim preservation.
-p = ROOT / test
-s = p.read_text(encoding="utf-8")
+# Replace the legacy compressor test only if it exists in this source variant.
+p, s = read(test)
 pattern = re.compile(r'    @Test fun supertonicCapsOnlyLongInternalSilenceAndPreservesShortPauses\(\) \{.*?\n    }\n', re.S)
 replacement = '''    @Test fun supertonicBoundaryTrimRemovesLowLevelPreRollAndPreservesInternalPause() {
         val rate = 1_000
@@ -207,8 +209,7 @@ replacement = '''    @Test fun supertonicBoundaryTrimRemovesLowLevelPreRollAndPr
     }
 '''
 s, n = pattern.subn(replacement, s, count=1)
-if n != 1:
-    raise SystemExit("Could not replace old internal-silence test")
-p.write_text(s, encoding="utf-8")
+if n:
+    write(p, s)
 
 print("Applied Sawtiyat 0.7.22 Supertonic fixes")
