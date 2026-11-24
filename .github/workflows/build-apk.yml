@@ -1,8 +1,8 @@
-name: Build Sawtiyat APK 0.7.21
+name: Build Sawtiyat APK 0.7.22
 
 on:
   push:
-    branches: [ "build-0.7.21" ]
+    branches: [ "build-0.7.22" ]
   workflow_dispatch:
 
 permissions:
@@ -26,8 +26,17 @@ jobs:
           unzip -q source.zip -d source
           test -f source/Sawtiyat-0.7.14-source/gradlew
 
-      - name: Apply 0.7.21 audio and version corrections
+      - name: Apply 0.7.21 base corrections
         run: python3 tools/patch_0_7_21.py
+
+      - name: Apply Supertonic 0.7.22 audio fixes
+        run: patch --batch --forward -p1 -d source/Sawtiyat-0.7.14-source < tools/supertonic-0.7.22.patch
+
+      - name: Verify version identity
+        working-directory: source/Sawtiyat-0.7.14-source
+        run: |
+          grep -q 'versionCode = 38' app/build.gradle.kts
+          grep -q 'versionName = "0.7.22"' app/build.gradle.kts
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -54,7 +63,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sawtiyat-0.7.21-debug-APK
+          name: Sawtiyat-0.7.22-debug-APK
           path: source/Sawtiyat-0.7.14-source/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
