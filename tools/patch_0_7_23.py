@@ -25,7 +25,7 @@ p.write_text(s, encoding="utf-8")
 
 edit(path,
 '    const val ICHKIL_SHA = "9779e1aca89cebc77a9b92037b7d700c422cdf6c3774d4883f4652f641f3f705"\n',
-'    const val ICHKIL_SHA = "9779e1aca89cebc77a9b92037b7d700c422cdf6c3774d4883f4652f641f3f705"\n    private const val ICHKIL_MODEL_BYTES = 22_284_311L\n    private const val ICHKIL_CONFIG_BYTES = 3_060L\n')
+'    const val ICHKIL_SHA = "9779e1aca89cebc77a9b92037b7d700c422cdf6c3774d4883f4652f641f3f705"\n    private const val ICHKIL_MODEL_BYTES = 22_284_311L\n    private const val ICHKIL_CONFIG_BYTES = 3_060L\n    @Volatile private var verifiedTashkeelFingerprint: String? = null\n')
 edit(path,
 '''        return File(d, "model.onnx").let { it.isFile && it.length() == 22_284_311L } &&
             File(d, "config.json").let { it.isFile && it.length() == 3_060L }
