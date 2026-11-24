@@ -1,7 +1,8 @@
-name: Build Sawtiyat APK
+name: Build Sawtiyat APK 0.7.21
 
 on:
   push:
+    branches: [ "build-0.7.21" ]
   workflow_dispatch:
 
 permissions:
@@ -24,6 +25,9 @@ jobs:
           mkdir source
           unzip -q source.zip -d source
           test -f source/Sawtiyat-0.7.14-source/gradlew
+
+      - name: Apply 0.7.21 audio and version corrections
+        run: python3 tools/patch_0_7_21.py
 
       - name: Set up Java 17
         uses: actions/setup-java@v4
@@ -50,7 +54,7 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sawtiyat-debug-APK
+          name: Sawtiyat-0.7.21-debug-APK
           path: source/Sawtiyat-0.7.14-source/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 14
