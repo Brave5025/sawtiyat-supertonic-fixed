@@ -22,7 +22,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat Sawtiyat-source-part-01.bin Sawtiyat-source-part-02.bin Sawtiyat-source-part-03.bin > source.zip
+          cat sawtiyat-upload-01.part sawtiyat-upload-02.part sawtiyat-upload-03.part sawtiyat-upload-04.part sawtiyat-upload-05.part sawtiyat-upload-06.part > source.zip
           unzip -t source.zip
           mkdir source
           unzip -q source.zip -d source
